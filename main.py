@@ -421,7 +421,7 @@ def encode_node(node: Node) -> str:
     pkg, version = node
     return f"{pkg}=={version}"
 
-def decode_node(s):
+def decode_node(s) -> Node:
     pkg, version = s.split("==", 1)
     return (pkg, version)
 
@@ -459,6 +459,7 @@ if __name__ == "__main__":
 
                 for pkg in new_packages:
                     nodes = get_all_versions_from_package(pkg)
+                    
                     build_graph(nodes)
 
         except Exception as e:
