@@ -318,7 +318,7 @@ def get_roots() -> set[Node]:
     Returns:
         set[Node]: The root nodes
     """
-    all_nodes = set(dep_map.keys())
+    all_nodes       = set(dep_map.keys())
     dependent_nodes = set(reverse_map.keys())
     return all_nodes - dependent_nodes
 
@@ -341,8 +341,8 @@ def build_graph(initial_nodes):
         Returns:
             Tuple[Node, List[Tuple[str, str]]]: A tuple of the original node and a list of dependencies for the original node.
         """
-        resolved_node = resolve_node(node[0], node[1])
-        pkg, version = resolved_node
+        resolved_node   = resolve_node(node[0], node[1])
+        pkg, version    = resolved_node
         return resolved_node, fetch_dependencies(pkg, version)
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -397,8 +397,8 @@ def split_pkg(pkg: str) -> Tuple[str, set]:
         Tuple[str, set]: Returns the original package and any extras if present
     """
     if "[" in pkg:
-        base, rest = pkg.split("[", 1)
-        extras = rest.rstrip("]").split(",")
+        base, rest  = pkg.split("[", 1)
+        extras      = rest.rstrip("]").split(",")
         return base, set(extras)
     return pkg, set()
 
@@ -425,8 +425,8 @@ def flatten_graph_merge_extras(dep_map: dict[Node, set[Node]]) -> set[Node]:
     grouped = {}
 
     for pkg, version in resolved_nodes:
-        base, extras = split_pkg(pkg)
-        key = (base, version)
+        base, extras    = split_pkg(pkg)
+        key             = (base, version)
 
         if key not in grouped:
             grouped[key] = set(extras)
@@ -616,9 +616,9 @@ def get_latest_in_graph(pkg: str) -> str | None:
     Returns:
         str: The newest version contained in the graph
     """
-    package_name = Requirement(pkg).name
+    package_name    = Requirement(pkg).name
 
-    versions = []
+    versions        = []
 
     for node in dep_map:
         node_pkg, node_version = node
