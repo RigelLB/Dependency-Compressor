@@ -13,6 +13,7 @@ import                                  argparse
 HOME_DIR            = os.getcwd()
 DEPENDENCY_PATH     = f"{HOME_DIR}/input/pypi_bandersnatch_requirements.txt"
 OUTPUT_PATH         = f"{HOME_DIR}/output/final.txt"
+VERSIONS_PATH       = f"{HOME_DIR}/output/all_package_versions.txt"
 SAVED_STATE_PATH    = f"{HOME_DIR}/input/pypi_saved_state.json"
 MAX_WORKERS         = 16
 
@@ -755,7 +756,7 @@ if __name__ == "__main__":
         full_package_node_list = get_all_packages_versions(packages)
         
         # For sanity write to versions to packages
-        with open("versions.txt", "a") as file:
+        with open(VERSIONS_PATH, "w") as file:
             for pkg in sorted([(pkg[0]+"=="+pkg[1]) for pkg in full_package_node_list], key=str.lower):
                 file.write(pkg + "\n")
 
