@@ -14,3 +14,6 @@ Modify the constants at the top of the main.py file to reflect the files you wou
 
 - Having the package defined as librosa will:
   1. Only fetch the newest version available and its dependencies 
+   
+## Future Additions
+- In flight control should be added to avoid massive memory ballooning if the commands fail prematurely.

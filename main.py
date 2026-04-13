@@ -110,7 +110,7 @@ def get_all_versions_from_package(package: str) -> List[Node]:
     if get_all_versions:
         try:
             cmd             = ["pip", "index", "versions", package_name]
-            resp            = subprocess.run(cmd, capture_output=True, text=True)
+            resp            = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             if "versions:" not in resp.stdout:
                 raise ValueError("Unexpected pip output format")
             resp            = resp.stdout.split("versions:")[1]
@@ -150,7 +150,7 @@ def get_latest_version(pkg: str) -> Node:
     try:
         package_name    = Requirement(pkg).name
         cmd             = ["pip", "index", "versions", package_name]
-        resp            = subprocess.run(cmd, capture_output=True, text=True)
+        resp            = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if "versions:" not in resp.stdout:
             raise ValueError("Unexpected pip output format")
 
@@ -255,7 +255,7 @@ def fetch_dependencies(pkg, version) -> List[Tuple[str, str]]:
     # Pipe the input and output from pip-compile to avoid writing to files
     cmd = ["pip-compile","-", "--no-header", "--no-annotate","--strip-extras", "--output-file=-"]
 
-    resp = subprocess.run(cmd, capture_output=True, text=True, input=f"{pkg}=={version}")
+    resp = subprocess.run(cmd, capture_output=True, text=True, input=f"{pkg}=={version}", timeout=15)
     resp = resp.stdout
 
     deep_dependencies = resp.removeprefix("\n").removesuffix("\n")
@@ -654,7 +654,7 @@ def check_for_new_pypi_versions(package: str) -> List[Node]:
 
     # Compare it to the versions from pypi
     cmd                     = ["pip", "index", "versions", pacakge_name]
-    resp                    = subprocess.run(cmd, capture_output=True, text=True)
+    resp                    = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     if "versions:" not in resp.stdout:
         raise ValueError("Unexpected pip output format")
     available_versions      = resp.stdout.split("versions:")[1].replace(" ", "").split(",")
