@@ -9,7 +9,7 @@ Modify the constants at the top of the main.py file to reflect the files you wou
   1. Attempt to get all versions starting at 0.9.0
   2. Fetch all dependencies for all versions
   
-- Having the package defined as librosa=0.9.0 will:
+- Having the package defined as librosa==0.9.0 will:
   1. Only fetch the dependencies for that specific version
 
 - Having the package defined as librosa will:
