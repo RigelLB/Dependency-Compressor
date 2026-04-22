@@ -1,7 +1,8 @@
 from typing                     import  Tuple, List
 from collections                import  defaultdict, deque
 from packaging.requirements     import  Requirement, InvalidRequirement
-from packaging.version          import  Version
+from packaging.version          import  Version, InvalidVersion
+from pathlib                    import  Path
 from concurrent.futures         import  ThreadPoolExecutor, as_completed
 import                                  hashlib
 import                                  json
@@ -10,12 +11,13 @@ import                                  subprocess
 import                                  argparse
 
 # Constants
-HOME_DIR            = os.getcwd()
-DEPENDENCY_PATH     = f"{HOME_DIR}/input/pypi_bandersnatch_requirements.txt"
-OUTPUT_PATH         = f"{HOME_DIR}/output/final.txt"
-VERSIONS_PATH       = f"{HOME_DIR}/output/all_package_versions.txt"
-SAVED_STATE_PATH    = f"{HOME_DIR}/input/pypi_saved_state.json"
-MAX_WORKERS         = 16
+HOME_DIR                = "/example_path/home/"
+DEPENDENCY_PATH         = f"{HOME_DIR}/pypi_requirements.txt"
+OUTPUT_PATH             = f"{HOME_DIR}/pypi_bandersnatch_requirements.txt"
+VERSIONS_PATH           = f"{HOME_DIR}/pypi_output/all_package_versions.txt"
+SAVED_STATE_PATH        = f"{HOME_DIR}/pypi_input/pypi_saved_state.json"
+FAILED_PACKAGES_PATH    = f"{HOME_DIR}/pypi_output/failed_packages.txt"
+MAX_WORKERS             = 8
 
 # Default values
 Node                                        = Tuple[str, str]   # (package, version)
@@ -24,7 +26,7 @@ reverse_map:        dict[Node, set[Node]]   = defaultdict(set)  # Reverse depend
 processed:          set[Node]               = set()             # Processed nodes
 ref_count:          dict[Node, int]         = defaultdict(int)  # Reference count (how many packages depend on a node)
 latest_version_map: dict[str, str]          = {}                # Latest version lookup
-
+failed_packages                             = []                # List of packages that failed
 
 def get_input_dependencies() -> List[str]:
     """
@@ -89,6 +91,8 @@ def get_all_versions_from_package(package: str) -> List[Node]:
         package_name    = package_obj.name
     except InvalidRequirement:
         print(f"Could not parse a valid requirement from the package. Skipping {package}")
+        failmsg = f"{package} -> Could not parse a valid requirment from the package. Skipping {package}"
+        failed_packages.append(failmsg)
         return []
     
     # Get package versions
@@ -113,26 +117,40 @@ def get_all_versions_from_package(package: str) -> List[Node]:
             resp            = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             if "versions:" not in resp.stdout:
                 raise ValueError("Unexpected pip output format")
+                
+                fail_msg = f"{package_name} -> Command failed: pip index versions {package_name}"
+                failed_packages.append(fail_msg)
             resp            = resp.stdout.split("versions:")[1]
             
             # Make sure that installed packages don't mess with version parsing
             try:
-                resp = resp.split("\nINSTALLED")[0]
+                resp = resp.split("INSTALLED")[0]
             except Exception as e:
                 pass
-
+                
             # Only keeps packages including and newer
-            split_versions  = resp.replace(" ", "").split(",")
-            version_index   = split_versions.index(package_version)
-            split_versions  = split_versions[:version_index + 1]
+            split_versions  = resp.strip().replace(" ", "").split(",")
+            base_version    = Version(package_version)
+            versions        = []
+
+            # Filter out only valid versions
+            for v in split_versions:
+                try:
+                    if Version(v) >= base_version:
+                        versions.append(v)
+                except InvalidVersion:
+                    continue
+
             extras          = f"[{','.join(package_obj.extras)}]" if package_obj.extras else ""
             
-            all_package_versions.extend((f"{package_name}{extras}", version) for version in split_versions)
+            all_package_versions.extend((f"{package_name}{extras}", version) for version in versions)
         
         except Exception as e:
-            print(f"Could not fetch version for package. Error: {e!r}")
+            print(f"Could not fetch version for package {package}. Error: {e!r}")
             print(f"Including only latest ({package})")
             # TODO: Add to failed list
+            fail_msg = f"{package} -> Could not fetch version for package. Error: {e!r}"
+            failed_packages.append(fail_msg)
             all_package_versions.append((package_name, "LATEST"))
     
     return all_package_versions
@@ -153,8 +171,10 @@ def get_latest_version(pkg: str) -> Node:
         resp            = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if "versions:" not in resp.stdout:
             raise ValueError("Unexpected pip output format")
+            fail_msg = f"{package_name} -> Command failed: pip index versions {package_name}"
+            failed_packages.append(fail_msg)
 
-        resp            = resp.stdout.split("versions:")[1]
+        resp            = resp.stdout.split("versions:")[1].strip()
         
         # Make sure that installed packages don't mess with version parsing
         try:
@@ -163,7 +183,7 @@ def get_latest_version(pkg: str) -> Node:
             pass
 
         # Filter out only the newest version
-        latest_version  = resp.replace(" ", "").split(",")[0]
+        latest_version  = resp.replace(" ", "").split(",")[0].strip()
 
         update_latest(pkg, latest_version)
 
@@ -253,10 +273,15 @@ def fetch_dependencies(pkg, version) -> List[Tuple[str, str]]:
     """
     print(f"Getting all dependencies for '{pkg}=={version}'")
     # Pipe the input and output from pip-compile to avoid writing to files
-    cmd = ["pip-compile","-", "--no-header", "--no-annotate","--strip-extras", "--output-file=-"]
+    cmd = ["pip-compile","-", "--no-header", "--no-annotate","--no-strip-extras", "--output-file=-"]
 
     resp = subprocess.run(cmd, capture_output=True, text=True, input=f"{pkg}=={version}", timeout=15)
+    errors = resp.stderr
     resp = resp.stdout
+
+    if errors and resp == "":
+        failmsg = f"{pkg}=={version} -> Pip compile failed. Errors: '{errors}'"
+        failed_packages.append(failmsg)
 
     deep_dependencies = resp.removeprefix("\n").removesuffix("\n")
     deep_dependencies = deep_dependencies.split("\n")
@@ -343,6 +368,10 @@ def build_graph(initial_nodes):
         """
         resolved_node   = resolve_node(node[0], node[1])
         pkg, version    = resolved_node
+
+        if resolved_node in dep_map.keys():
+            return resolve_node, dep_map[resolved_node]
+
         return resolved_node, fetch_dependencies(pkg, version)
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -366,7 +395,7 @@ def build_graph(initial_nodes):
                 dep_map[node] = set()
 
                 for dep_pkg, dep_version in deps:
-
+                    
                     dep_node = resolve_node(dep_pkg, dep_version)
 
                     # ----------------------------
@@ -402,7 +431,7 @@ def split_pkg(pkg: str) -> Tuple[str, set]:
         return base, set(extras)
     return pkg, set()
 
-def flatten_graph_merge_extras(dep_map: dict[Node, set[Node]]) -> set[Node]:
+def flatten_graph_merge_extras(dep_map: dict[Node, set[Node]]) -> List[str]:
     """
     Returns all nodes from the graph while only keeping nodes that are unique (typer and typer[all] will only return typer[all])
 
@@ -410,7 +439,7 @@ def flatten_graph_merge_extras(dep_map: dict[Node, set[Node]]) -> set[Node]:
         dep_map (dict[Node, set[Node]]): Dependency map for the different packages
     
     Returns:
-        set[Node]: All the nodes from the graph (package, version)
+        List[str]: All the nodes from the graph (package, version)
     """
     all_nodes = set(dep_map.keys())
 
@@ -420,7 +449,13 @@ def flatten_graph_merge_extras(dep_map: dict[Node, set[Node]]) -> set[Node]:
     # Make sure that all the nodes a resolved (no LATEST as the versions)
     resolved_nodes = set()
     for pkg, version in all_nodes:
-        resolved_nodes.add(resolve_node(pkg, version))
+        resolved_pkg, resolved_version = resolve_node(pkg, version)
+
+        # Don't include the node if the version is not valid
+        if not resolved_version or resolved_version == "None":
+            print(f"Could not resolve a valid version for {resolved_pkg} (Version: {resolved_version})")
+            continue
+        resolved_nodes.add((resolved_pkg, resolved_version))
 
     grouped = {}
 
@@ -625,7 +660,7 @@ def get_latest_in_graph(pkg: str) -> str | None:
         if node_version == "LATEST":
             continue
 
-        if node_pkg == package_name:
+        if package_name in node_pkg:
             versions.append(node_version)
 
     if not versions:
@@ -644,12 +679,19 @@ def check_for_new_pypi_versions(package: str) -> List[Node]:
         List[Node]: List of `Node`'s containing all versions that the graph does not contain
     """
     new_nodes               = []
-    pacakge_name            = Requirement(package).name
+    package_obj             = Requirement(package)
+    pacakge_name            = package_obj.name
 
     graph_latest_version    = get_latest_in_graph(package)
 
     if graph_latest_version is None:
         print(f"The graph does not contain any versions of the package {package}, {graph_latest_version}")
+
+        # Attempt to add it
+        try:
+            add_package_all_versions(package)
+        except Exception as e:
+            print(f"Failed to add the package to the map. Debug by making sure that the package can be normally be installed. The version might not be defined by pypi anymore.")
         return []
 
     # Compare it to the versions from pypi
@@ -657,18 +699,37 @@ def check_for_new_pypi_versions(package: str) -> List[Node]:
     resp                    = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     if "versions:" not in resp.stdout:
         raise ValueError("Unexpected pip output format")
-    available_versions      = resp.stdout.split("versions:")[1].replace(" ", "").split(",")
+
+    # Make sure that installed packages don't mess with version parsing
+    resp = resp.stdout
+    
+    try:
+        resp = resp.split("\nINSTALLED")[0]
+    except Exception as e:
+        pass
+
+    available_versions      = resp.split("versions:")[1].strip().replace(" ", "").split(",")
+
 
     # If the current latest version in our graph is not at the beginning of the list that means newer versions are available
-    version_index           = available_versions.index(graph_latest_version)
+    base_version    = Version(graph_latest_version)
+    versions        = []
+    extras          = f"[{','.join(package_obj.extras)}]" if package_obj.extras else ""
+    # Filter out only valid versions
+    for v in available_versions:
+        try:
+            if Version(v) >= base_version:
+                versions.append(v)
+        except InvalidVersion:
+            continue
 
-    if version_index != 0:
-        for version in available_versions[:version_index]:
-            new_nodes.append((package, version.strip()))
+    if len(versions) != 0:
+        for version in versions:
+            new_nodes.append((f"{pacakge_name}{extras}", version.strip()))
 
     return new_nodes
 
-if __name__ == "__main__":   
+if __name__ == "__main__":
     # Initial variables
     state_file_exists       = False
     full_reset              = False
@@ -686,17 +747,24 @@ if __name__ == "__main__":
     if not packages:
         exit()
 
+    # Make sure that the folder paths exists for pypi (pypi/pypi_input and pypy/pypi_ouput)
+    p = Path(VERSIONS_PATH)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p = Path(SAVED_STATE_PATH)
+    p.parent.mkdir(parents=True, exist_ok=True)
+
     # Check to see if saved state file exsists
     state_file_exists = os.path.exists(SAVED_STATE_PATH)
     check_versions    = False
 
     if state_file_exists and not full_reset:
         try:
+            print("Attempting to load state file.")
             state = load_state(SAVED_STATE_PATH)
 
             # The state did not contain the dependency map
             if dep_map == {}:
-                raise
+                raise ValueError("Dep map is empty")
 
             if state["input_hash"] == compute_input_hash(packages):
                 print("No changes determined from input file.")
@@ -749,7 +817,7 @@ if __name__ == "__main__":
             print(f"Error: {e!r}. Could not load state file properly. Rebuilding graph.")
             rebuild = True
 
-    if rebuild:
+    if rebuild or full_reset:
         print("Rebuilding graph")
         # No saved state
         reset_all()
@@ -768,3 +836,8 @@ if __name__ == "__main__":
     with open(OUTPUT_PATH, "w") as file:
         for pkg in sorted(flatten_graph_merge_extras(dep_map=dep_map), key=str.lower):
             file.write(pkg + "\n")
+
+    # Write to the fail file the failed py packages 
+    with open(FAILED_PACKAGES_PATH, "w") as file:
+        for failed in failed_packages:
+            file.write(failed + "\n")
